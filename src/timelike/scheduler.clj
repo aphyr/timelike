@@ -1,4 +1,5 @@
 (ns timelike.scheduler
+  (:refer-clojure :exclude [time future])
   (:use [clojure.stacktrace :only [print-cause-trace]])
   (:import (java.util.concurrent ConcurrentSkipListSet
                                  CountDownLatch)))
@@ -26,6 +27,11 @@
 ; You can only run one simulation at a time. Start a simulation by creating at
 ; least one thread. Wait for the simulation to complete with
 ; (await-completion). Then you can reset the state with (reset-scheduler!)
+
+(defn prn*
+  [& a]
+  (locking prn
+    (apply prn a)))
 
 (def clock 
   "The current time."
@@ -62,12 +68,16 @@
 (defn reset-scheduler!
   "Forcibly reset all state."
   []
-  (reset! clock 0)
-  (reset! active-threads 0)
-  (reset! all-threads 0)
-  (reset! completed (promise))
-  (reset! barrier-id-atom 0)
-  (.clear barriers))
+  (locking barriers
+    (assert (zero? @active-threads))
+    (assert (zero? @all-threads))
+    (assert (.isEmpty barriers))
+    (reset! clock 0)
+    (reset! active-threads 0)
+    (reset! all-threads 0)
+    (reset! completed (promise))
+    (reset! barrier-id-atom 0)
+    (.clear barriers)))
 
 (defn time
   "The current virtual time."
@@ -76,11 +86,13 @@
 
 (defn advance!
   "Advances the clock to the next time barrier, and releases all threads at
-  that barrier simultaneously. Returns the number of threads awakened, or nil if there were no remaining tasks."
+  that barrier simultaneously. Returns the number of threads awakened, or nil
+  if there were no remaining tasks. Advance is always synchronized. May be
+  blocked if another thread is within a (simultaneously) block."
   ([]
-   ; Atomically remove all elements for the next timestamp.
-   (when-let [bs (locking barriers
-                   (when-let [b1 (.pollFirst barriers)]
+   (locking barriers
+     ; Atomically remove all elements for the next timestamp.
+     (when-let [bs (when-let [b1 (.pollFirst barriers)]
                      ; There *is* a next element.
                      (loop [bs (list b1)]
                        (if-let [b (.pollFirst barriers)]
@@ -92,36 +104,48 @@
                              (.add barriers b)
                              bs))
                          ; Nothing left
-                         bs))))]
+                         bs)))]
 
-     ; OK, we've got a bunch of barriers. Advance the clock...
-     (swap! clock max (first (first bs)))
 
-     ; Mark that we're releasing N threads...
-     (swap! active-threads + (count bs))
+       ; OK, we've got a bunch of barriers. Advance the clock...
+       (swap! clock max (first (first bs)))
 
-     ; LET LOOSE THE DOGS OF WAR
-     (doseq [[t id latch] bs]
-       (.countDown latch))
-     
-     (count bs))))
+       ; Mark that we're releasing N threads...
+       (swap! active-threads + (count bs))
+
+       ; LET LOOSE THE DOGS OF WAR
+       (doseq [[t id latch] bs]
+         (.countDown latch))
+
+       (count bs)))))
+
+(defmacro simultaneous
+  "Ensures that the scheduler does not advance! for the duration of the body.
+  Use to start multiple threads at once, and prevent one from racing ahead
+  until all have a chance to sleep or exit."
+  [& body]
+  `(locking barriers ~@body))
 
 (defn sleep-until
   "Block the current thread until time t. If this is the sole remaining thread,
   triggers the advance! to the next scheduled time."
   [t]
   (let [latch (CountDownLatch. 1)]
-;    (prn "Sleeping at" (time) "until" t)
+;    (prn* "Sleeping at" (time) "until" t)
 
-    ; Schedule our awakening
-    (.add barriers [t (barrier-id) latch])
+    ; Schedule our awakening. Note that because ConcurrentSkipListMap is only
+    ; weakly consistent, we need a lock to guarantee our insertion will be
+    ; visible to any advancing threads. I should figure out a faster way to do
+    ; this.
+    (locking barriers
+      (.add barriers [t (barrier-id) latch]))
     
-;    (prn "Barriers is now" barriers)
+;    (prn* "Barriers is now" (map (fn [[t id l]] [t id]) barriers))
 
     ; Mark this thread as inactive, and if we're the last one, advance
     (let [active (swap! active-threads dec)]
       (when (zero? active)
-;       (prn "I'm the last thread alive; advancing!")
+;       (prn* "I'm the last thread alive; advancing!")
         (advance!)))
 
     ; And block
@@ -153,9 +177,8 @@
   [f]
   (swap! all-threads inc)
   (swap! active-threads inc)
-  (.start (Thread. (fn []
-                     (f)
-                     (thread-exit!)))))
+  (.start (Thread. (fn [] (f) (thread-exit!))
+                   "timelike")))
 
 (defmacro thread
   "The basic threading macro. Starts a new virtual thread which executes all

@@ -3,4 +3,6 @@
   :url "http://github.com/aphyr/timelike"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
+  :test-selectors {:default (constantly true)
+                   :focus :focus}
   :dependencies [[org.clojure/clojure "1.4.0"]])
