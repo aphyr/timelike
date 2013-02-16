@@ -172,3 +172,14 @@
   "Blocks until all threads have completed."
   []
   (deref @completed))
+
+(defmacro future
+  "Analogous to Clojure's future, but works with the virtual thread scheduler.
+  Returns a promise immediately. Spawns a thread to execute body, and delivers
+  the last value of the body to the promise when the thread completes."
+  [& body]
+  `(let [p# (promise)]
+     (thread
+       (deliver p#
+                (do ~@body)))
+     p#))

@@ -6,6 +6,7 @@
   [f]
   (reset-scheduler!)
   (f)
+  (await-completion)
   (reset-scheduler!))
 (use-fixtures :each reset-test!)
 
@@ -76,3 +77,7 @@
            (is (not= @x @y))
            (is (not= @x @z))
            (is (not= @y @z))))
+
+(deftest future-test
+         (let [futures (map #(future (inc %)) [-5 10 2 -4 3])]
+           (is (= (map deref futures) [-4 11 3 -3 4]))))
