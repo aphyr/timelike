@@ -1,6 +1,9 @@
 (ns timelike.node
   (:refer-clojure :exclude [time future])
-  (:import (java.util.concurrent ConcurrentSkipListSet))
+  (:import (java.util.concurrent ConcurrentSkipListSet
+                                 LinkedBlockingQueue
+                                 LinkedTransferQueue
+                                 TimeUnit))
   (:use timelike.scheduler))
 
 ; A component in this system takes a request and returns a response. Both
@@ -25,14 +28,27 @@
   "Does this request mean shut down?"
   (comp :shutdown first))
 
-(defn singlethreaded
-  "Returns a transparent singlethreaded node which ensures requests are
-  processed in order."
+(defn mutex
+  "Returns a transparent mutexed node which ensures requests are processed one
+  at a time--but makes no ordering guarantees."
   [downstream]
   (let [o (Object.)]
     (fn [req]
       (locking* o
         (downstream req)))))
+
+(defn exclusive-queue
+  "Wraps a node in a queue which can only process one message at a time. Each
+  call to this node enqueues a request on the queue, which is processed by a
+  worker thread."
+  [downstream]
+  (let [q (LinkedBlockingQueue.)
+        lock (Object.)]
+    (fn [req]
+      (.put q req)
+      (locking* lock
+        (let [r2 (.poll q)]
+          (downstream r2))))))
 
 (defn constant-server
   "A node which sleeps for a fixed number of seconds before returning."
@@ -114,22 +130,19 @@
   "Every dt seconds, for a total of n requests, fires off a thread to apply req
   to node. Returns a list of results."
   [n dt req-generator node]
-  (loop [i  (dec n)
+  (loop [i  0
          ps []]
-    (let [p (promise)]
-      ; Execute request in a new thread
-      (thread
-        (let [r (node (req-generator))]
-          (deliver p r)))
-
-      (if (zero? i)
-        (do
-          ; Resolve all promises and return.
-          (doall (map deref* (conj ps p)))) 
-        (do
-          ; Next round
-          (sleep dt)
-          (recur (dec i) (conj ps p)))))))
+    (if (< i n)
+      (let [p  (promise)
+            ps (conj ps p)]
+        ; Execute request in a new thread
+        (thread
+          (let [r (node (req-generator))]
+            (deliver p r)))
+        (sleep dt)
+        (recur (inc i) ps))
+      (do
+        (doall (map deref* ps))))))
 
 (defn req
   "Create a request."
