@@ -76,11 +76,13 @@
 
 (deftest random-test
          (test-node "Random LB"
-           (random-lb :lb (backends pool-size))))
+           (random-lb :lb
+             (backends pool-size))))
 
 (deftest rr-test
          (test-node "Round-robin LB"
-           (rr-lb :lb (backends pool-size))))
+           (rr-lb :lb
+             (backends pool-size))))
 
 (deftest random-even-test
          (test-node "Random -> 10 even LBs -> One pool"

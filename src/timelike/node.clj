@@ -162,6 +162,28 @@
   (fn [req]
     (conj req {:node name :time (time)})))
 
+(defn faulty
+  "A node which toggles between OK and failure modes. In its failure state, it
+  returns errors instead of passing requests downstream. The time spent in each
+  state is exponentially distributed, with the mean time before failure being
+  the first argument, and mean time to resolution being the second."
+  [mean-uptime mean-downtime downstream]
+  (let [up-dist   (exponential-distribution   (/ mean-uptime))
+        down-dist (exponential-distribution (/ mean-downtime))
+        ; [are we online, next time to transition at]
+        state     (atom [true (draw up-dist)])]
+    (fn [req]
+      ; State transition?
+      (let [[up? _] (swap! state (fn [[up? t :as state]]
+                                   (if (< (time) t)
+                                     state
+                                     (if up?
+                                       [false (+ (time) (draw down-dist))]
+                                       [true  (+ (time) (draw up-dist))]))))]
+        (if up?
+          (downstream req)
+          (conj req (error)))))))
+
 (defmacro pool
   "Evaluates body n times and returns a vector of the results."
   [n & body]

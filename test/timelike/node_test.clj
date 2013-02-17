@@ -30,3 +30,14 @@
                    {:time 2 :error true}
                    {:time 2 :retry 2}
                    {:time 3 :error true}]))))
+
+(deftest faulty-test
+         (let [f (faulty 100 10 identity)
+               results (future*
+                         (doall (map (fn [i]
+                                       (sleep 1)
+                                       (error? (f [])))
+                                     (range 100000))))
+               failed (count (keep identity @results))]
+           ; (pprint @results)
+           (is (< 0.05 (/ failed (count @results)) 0.15))))
