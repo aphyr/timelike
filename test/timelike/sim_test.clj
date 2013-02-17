@@ -31,11 +31,13 @@
                      (drop (/ n 4))
                      (take (/ n 2)))
         latencies  (map latency reqs)
-        throughput (throughput reqs)
+        response-rate (response-rate reqs)
+        request-rate  (request-rate reqs)
         [q0 q5 q95 q99 q1] (quantile latencies :probs [0 0.5 0.95 0.99 1])]
     (println "Total reqs:    " n)
     (println "Selected reqs: " (count reqs)) 
-    (println "Throughput:    " (float (* 1000 throughput)) "reqs/s")
+    (println "Request rate:  " (float (* 1000 request-rate))  "reqs/s")
+    (println "Response rate: " (float (* 1000 response-rate)) "reqs/s")
 
     (println "Latency distribution:")
     (println "Min:    " q0)
@@ -44,7 +46,7 @@
     (println "99th %: " q99)
     (println "Max:    " q1)))
  
-(def n 100000)
+(def n 10000)
 (def interval 1)
 (def pool-size 250)
 
@@ -74,28 +76,30 @@
 
 (deftest random-test
          (test-node "Random LB"
-                    (random-lb :lb (backends pool-size))))
+           (random-lb :lb (backends pool-size))))
 
 (deftest rr-test
          (test-node "Round-robin LB"
-                    (rr-lb :lb (backends pool-size))))
+           (rr-lb :lb (backends pool-size))))
 
 (deftest random-even-test
          (test-node "Random -> 10 even LBs -> One pool"
-                    (let [backends (backends pool-size)]
-                      (random-lb :dist
-                        (pool 10 
-                          (even-conn-lb :sub backends))))))
+           (let [backends (backends pool-size)]
+             (random-lb :dist
+               (pool 10 
+                 (even-conn-lb :sub
+                   backends))))))
 
 (deftest random-even-disjoint-test
          (assert (zero? (mod pool-size 10)))
          (test-node 
            "Random -> 10 even LBs -> 10 disjoint pools"
            (random-lb :dist
-                      (pool 10
-                        (even-conn-lb :sub
-                          (backends (/ pool-size 10)))))))
+             (pool 10
+               (even-conn-lb :sub
+                 (backends (/ pool-size 10)))))))
 
 (deftest even-conn-test
          (test-node "Even connections LB"
-                    (even-conn-lb :even (backends pool-size))))
+           (even-conn-lb :even 
+             (backends pool-size))))

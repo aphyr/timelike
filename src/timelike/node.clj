@@ -287,11 +287,22 @@
   (- (last-time req)
      (:time (first req))))
 
-(defn throughput
-  "The mean throughput of a sequence of requests."
+(defn response-rate
+  "The mean throughput of a sequence of requests, as defined by the latest
+  times."
   [reqs]
   (let [finishes (map last-time reqs)
         t0       (apply min finishes)
         t1       (apply max finishes)
         dt       (- t1 t0)]
+    (/ (count reqs) dt)))
+
+(defn request-rate
+  "The mean throughput of a sequence of requests, as defined by the earliest
+  times."
+  [reqs]
+  (let [starts (map first-time reqs)
+        t0     (apply min starts)
+        t1     (apply max starts)
+        dt     (- t1 t0)]
     (/ (count reqs) dt)))
