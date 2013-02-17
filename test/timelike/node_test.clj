@@ -6,6 +6,11 @@
         timelike.node
         [incanter.stats :only [quantile]]))
 
+(defn linesep
+  [f]
+  (f)
+  (println))
+
 (defn reset-test!
   [f]
   (reset-scheduler!)
@@ -13,6 +18,7 @@
   (when-not (zero? @all-threads)
     (await-completion))
   (reset-scheduler!))
+
 (use-fixtures :each reset-test!)
 
 (defn pstats
@@ -25,12 +31,49 @@
     (println "95th %: " q95)
     (println "99th %: " q99)
     (println "Max:    " q1)))
+ 
+(def n 10000)
+(def interval 1)
+(def pool-size 200)
+(def server-time 200)
+
+(defn test-node
+  [name node]
+  (println name)
+  (let [results (future*
+                  (constant-load n interval req node))]
+    (node (shutdown))
+    (pstats @results) 
+    (println)))
 
 (deftest random-test
-         (let [node (random-lb :lb
-                               (pool 10
+         (test-node "Random LB"
+                    (random-lb :lb
+                               (pool pool-size
                                      (singlethreaded
-                                       (constant-server :rails 200))))
-               results (future*
-                         (constant-load 200 1 req node))]
-           (pstats @results)))
+                                       (constant-server :rails server-time))))))
+
+(deftest rr-test
+         (test-node "Round-robin LB"
+                    (rr-lb :lb
+                           (pool pool-size
+                                 (singlethreaded
+                                   (constant-server :rails server-time))))))
+
+(deftest random-rr-test
+         (test-node "Random -> 4 RR LBs -> One pool"
+                    (let [backends (pool pool-size
+                                         (singlethreaded
+                                           (constant-server 
+                                             :rails server-time)))]
+                      (random-lb :rand
+                                 (pool 4
+                                       (rr-lb :rr backends))))))
+
+(deftest even-conn-test
+         (test-node "Even connections LB"
+                    (even-conn-lb :even
+                                  (pool pool-size
+                                        (singlethreaded
+                                          (constant-server
+                                            :rails server-time))))))
