@@ -26,9 +26,61 @@
 ;  
 ; A node is an function which accepts a request object and returns a history.
 
-(def shutdown?
+(defn shutdown
+  "A special shutdown request."
+  []
+  [{:time (time) :shutdown true}]) 
+
+(defn shutdown?
   "Does this request mean shut down?"
-  (comp :shutdown first))
+  [req]
+  (:shutdown (first req)))
+
+(defn error
+  "Merges {:time time :error true} with m"
+  ([] (error {}))
+  ([m] (merge {:time (time) :error true} m)))
+
+(defn error?
+  "Is the most recent event in the response an error?"
+  [req]
+  (:error (last req)))
+
+(defmacro try-req
+  "Takes a body returning a response. If the response is an error, binds that
+  error to err in (catch err ...), and evaluates catch expressions in order
+  instead, returning the last return value of the last catch expression."
+  [& forms]
+  (let [catch-exprs (map rest (filter #(and (list? %)
+                                            (= 'catch (first %)))
+                                      forms))
+        body        (filter #(or (not (list? %))
+                                 (not= 'catch (first %)))
+                            forms)
+        response    (gensym 'response)]
+    `(let [~response (do ~@body)]
+       (if (error? ~response)
+         (do ~@(map (fn [[sym & body]]
+                      `(let [~sym ~response]
+                         ~@body))
+                    catch-exprs))
+         ~response))))
+
+(defn retry
+  "Wraps a downstream node; retries requests n times on errors."
+  [n downstream]
+  (assert (< 0 n))
+  (fn [req]
+    (loop [i 1
+           req req]
+        (try-req
+          (downstream req)
+          (catch err
+            (if (<= n i)
+              err
+              (recur (inc i)
+                     (conj err {:retry i 
+                                :time (time)}))))))))
 
 (defn fixed-delay
   "Sleeps for dt seconds, then calls downstream."
@@ -198,11 +250,6 @@
   "Create a request."
   []
   [{:time (time)}])
-
-(defn shutdown
-  "A special shutdown request."
-  []
-  [{:time (time) :shutdown true}]) 
 
 (defn first-time
   "When did this request originate?"
