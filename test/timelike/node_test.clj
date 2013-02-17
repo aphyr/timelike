@@ -51,29 +51,41 @@
                     (random-lb :lb
                                (pool pool-size
                                      (exclusive-queue
-                                       (constant-server :rails server-time))))))
+                                       (exponential-server :rails server-time))))))
 
 (deftest rr-test
          (test-node "Round-robin LB"
                     (rr-lb :lb
                            (pool pool-size
                                  (exclusive-queue
-                                   (constant-server :rails server-time))))))
+                                   (exponential-server :rails server-time))))))
 
-(deftest random-rr-test
-         (test-node "Random -> 4 RR LBs -> One pool"
+(deftest random-even-test
+         (test-node "Random -> 10 even LBs -> One pool"
                     (let [backends (pool pool-size
                                          (exclusive-queue
-                                           (constant-server 
+                                           (exponential-server 
                                              :rails server-time)))]
-                      (random-lb :rand
-                                 (pool 4
-                                       (rr-lb :rr backends))))))
+                      (random-lb :dist
+                                 (pool 10
+                                       (even-conn-lb :sub backends))))))
+
+(deftest random-even-disjoint-test
+         (assert (zero? (mod pool-size 10)))
+         (test-node 
+           "Random -> 10 even LBs -> 10 disjoint pools"
+           (random-lb :dist
+                      (pool 10
+                            (even-conn-lb :sub
+                                     (pool (/ pool-size 10)
+                                           (exclusive-queue
+                                             (exponential-server
+                                               :rails server-time))))))))
 
 (deftest even-conn-test
          (test-node "Even connections LB"
                     (even-conn-lb :even
                                   (pool pool-size
                                         (exclusive-queue
-                                          (constant-server
+                                          (exponential-server
                                             :rails server-time))))))

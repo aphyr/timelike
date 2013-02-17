@@ -58,6 +58,15 @@
       (sleep dt)
       (conj req {:node name :time (time)})))
 
+(defn exponential-server
+  "A node which sleeps for an exponentially distributed number of seconds
+  before returning. Mean is the inverse of rate."
+  [name mean]
+  (let [dist (exponential-distribution (/ mean))]
+        (fn [req]
+          (sleep (draw dist))
+          (conj req {:node name :time (time)}))))
+
 (defmacro pool
   "Evaluates body n times and returns a vector of the results."
   [n & body]
@@ -154,10 +163,9 @@
 (defn poisson-load
   "A Poisson-distributed process: requests are uniformly distributed through
   time and independent of each other. Fires off threads to apply (req) to the
-  given node. The mean time between events is exponentially distributed with
-  the given mean."
+  given node. The average rate lambda is 1/mean."
   [n mean req-generator node]
-  (let [dist (exponential-distribution mean)]
+  (let [dist (exponential-distribution (/ mean))]
     (interval-load n #(draw dist) req-generator node)))
 
 (defn req

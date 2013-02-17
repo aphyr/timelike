@@ -110,15 +110,16 @@
   thread, we may proceed to the next time."
   []
   (dosync
-    (let [held    (ensure locks-held)
-          waiting (ensure locks-waiting)
-          active  (ensure active-threads)
-          blocked (set (keep (fn [[waiter obj]]
-                               (when-let [holder (held obj)]
-                                 (when (not= holder waiter)
-                                   waiter)))
-                             waiting))]
-      (every? blocked active))))
+    (or (empty? (ensure active-threads))
+        (let [held    (ensure locks-held)
+              waiting (ensure locks-waiting)
+              active  @active-threads
+              blocked (set (keep (fn [[waiter obj]]
+                                   (when-let [holder (held obj)]
+                                     (when (not= holder waiter)
+                                       waiter)))
+                                 waiting))]
+          (every? blocked active)))))
 
 (defn advance!
   "Advances the clock to the next time barrier, and releases all threads at
