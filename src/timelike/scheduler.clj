@@ -1,6 +1,7 @@
 (ns timelike.scheduler
   (:refer-clojure :exclude [time future])
-  (:use [clojure.stacktrace :only [print-cause-trace]])
+  (:use [clojure.stacktrace :only [print-cause-trace]] 
+        clojure.set)
   (:import (java.util.concurrent ConcurrentSkipListSet
                                  CountDownLatch)))
 
@@ -28,10 +29,21 @@
 ; least one thread. Wait for the simulation to complete with
 ; (await-completion). Then you can reset the state with (reset-scheduler!)
 
+(defn thread-id
+  "Returns the current thread id"
+  []
+  (.getId (Thread/currentThread))) 
+
+(def logger (agent nil))
+
+(defn log-prn
+  [_ & things]
+  (apply prn things))
+
 (defn prn*
+  "Synchronized prn"
   [& a]
-  (locking prn
-    (apply prn a)))
+  (apply send-off logger log-prn (thread-id) a))
 
 (def clock 
   "The current time."
@@ -42,8 +54,17 @@
   (atom 0))
 
 (def active-threads
-  "The current number of awake threads."
-  (atom 0))
+  "A set of the currently active threads."
+  (ref #{}))
+
+(def locks-waiting
+  "A map of thread ids to objects which that thread is trying to aquire a lock
+  for."
+  (ref {}))
+
+(def locks-held
+  "A map of objects to the threads which currently hold their lock."
+  (ref {}))
 
 (def completed
   "A reference to a promise which is fulfilled once all threads have exited."
@@ -57,67 +78,106 @@
       (compare [t1 id1]
                [t2 id2]))))
 
-(def barrier-id-atom
+(def thread-count
   (atom 0))
-
-(defn barrier-id
-  "Returns a new barrier id"
-  []
-  (swap! barrier-id-atom inc))
 
 (defn reset-scheduler!
   "Forcibly reset all state."
   []
   (locking barriers
-    (assert (zero? @active-threads))
-    (assert (zero? @all-threads))
-    (assert (.isEmpty barriers))
-    (reset! clock 0)
-    (reset! active-threads 0)
-    (reset! all-threads 0)
-    (reset! completed (promise))
-    (reset! barrier-id-atom 0)
-    (.clear barriers)))
+    (dosync
+      (assert (empty? (ensure active-threads))) 
+      (assert (zero? (deref all-threads))) 
+      (assert (.isEmpty barriers)) 
+      (assert (empty? (ensure locks-waiting))) 
+      (assert (empty? (ensure locks-held)))
+      (reset! thread-count 0)
+      (reset! clock 0) 
+      (reset! completed (promise)) 
+      (reset! all-threads 0) 
+      (ref-set active-threads #{})
+      (ref-set locks-waiting {})
+      (ref-set locks-held {})
+      (.clear barriers))))
 
 (defn time
   "The current virtual time."
   [] 
   @clock)
 
+(defn can-advance?
+  "If all active threads are waiting to acquire a lock held by a different
+  thread, we may proceed to the next time."
+  []
+  (dosync
+    (let [held    (ensure locks-held)
+          waiting (ensure locks-waiting)
+          active  (ensure active-threads)
+          blocked (set (keep (fn [[waiter obj]]
+                               (when-let [holder (held obj)]
+                                 (when (not= holder waiter)
+                                   waiter)))
+                             waiting))]
+      (every? blocked active))))
+
 (defn advance!
   "Advances the clock to the next time barrier, and releases all threads at
-  that barrier simultaneously. Returns the number of threads awakened, or nil
+  that barrier. Returns the number of threads awakened, or nil
   if there were no remaining tasks. Advance is always synchronized. May be
-  blocked if another thread is within a (simultaneously) block."
+  blocked if another thread is within a (simultaneous) block.
+  
+  At the next timestep, advance may awaken some threads which cannot proceed
+  because they are waiting to acquire locks. After all pending barriers have
+  been released, advance! checks for this deadlock condition and, if all
+  threads are stuck, can advance again, until at least one thread is alive."
   ([]
    (locking barriers
-     ; Atomically remove all elements for the next timestamp.
-     (when-let [bs (when-let [b1 (.pollFirst barriers)]
-                     ; There *is* a next element.
-                     (loop [bs (list b1)]
-                       (if-let [b (.pollFirst barriers)]
-                         (if (<= (first b) (first b1))
-                           ; Keep going
-                           (recur (conj bs b))
-                           ; Whoops, went too far, replace element
-                           (do
-                             (.add barriers b)
-                             bs))
-                         ; Nothing left
-                         bs)))]
+     (loop []
+       ; Atomically remove all elements for the next timestamp.
+       (when-let [bs (when-let [b1 (.pollFirst barriers)]
+                       ; There *is* a next element.
+                       (loop [bs (list b1)]
+                         (if-let [b (.pollFirst barriers)]
+                           (if (<= (first b) (first b1))
+                             ; Keep going
+                             (recur (conj bs b))
+                             ; Whoops, went too far, replace element
+                             (do
+                               (.add barriers b)
+                               bs))
+                           ; Nothing left
+                           bs)))]
 
+         ; OK, we've got a bunch of barriers. Advance the clock...
+         (swap! clock max (first (first bs)))
 
-       ; OK, we've got a bunch of barriers. Advance the clock...
-       (swap! clock max (first (first bs)))
+         ; Mark that we're releasing these threads...
+         (dosync
+           (alter active-threads union (set (map second bs))))
 
-       ; Mark that we're releasing N threads...
-       (swap! active-threads + (count bs))
+         ; LET LOOSE THE DOGS OF WAR
+         (doseq [[t id latch] bs]
+           (.countDown latch))
 
-       ; LET LOOSE THE DOGS OF WAR
-       (doseq [[t id latch] bs]
-         (.countDown latch))
+         ; Check for deadlock at this time and continue if necessary.
+         (if (can-advance?)
+           (recur)
+           (count bs)))))))
 
-       (count bs)))))
+(defn inactivate!
+  "Called when a thread goes inactive. May trigger advance!"
+  []
+  (when (dosync
+          (alter active-threads disj (thread-id))
+          (can-advance?))
+    (advance!))
+  )
+
+(defn activate!
+  "Called when a thread goes active."
+  []
+  (dosync
+    (alter active-threads conj (thread-id))))
 
 (defmacro simultaneous
   "Ensures that the scheduler does not advance! for the duration of the body.
@@ -131,25 +191,19 @@
   triggers the advance! to the next scheduled time."
   [t]
   (let [latch (CountDownLatch. 1)]
-;    (prn* "Sleeping at" (time) "until" t)
-
     ; Schedule our awakening. Note that because ConcurrentSkipListMap is only
     ; weakly consistent, we need a lock to guarantee our insertion will be
     ; visible to any advancing threads. I should figure out a faster way to do
     ; this.
     (locking barriers
-      (.add barriers [t (barrier-id) latch]))
-    
-;    (prn* "Barriers is now" (map (fn [[t id l]] [t id]) barriers))
+      (.add barriers [t (thread-id) latch]))
 
-    ; Mark this thread as inactive, and if we're the last one, advance
-    (let [active (swap! active-threads dec)]
-      (when (zero? active)
-;       (prn* "I'm the last thread alive; advancing!")
-        (advance!)))
+    ; Mark this thread as inactive (and possibly advance)
+    (inactivate!)
 
     ; And block
-    (.await latch)))
+    (.await latch)
+    ))
 
 (defn sleep
   "Sleep for n seconds."
@@ -157,16 +211,15 @@
   (sleep-until (+ n (time))))
 
 (defn thread-exit!
-  "Called by a thread when it terminates. Decreemnts active-threads and
-  all-threads.
+  "Called by a thread when it terminates. Removes the thread from
+  active-threads and all-threads.
   
   If there are no remaining active threads, advances.
   
   If there are no threads left at *all*, delivers the completed promise so that
   any threads awaiting our completion know the simulation is finished."
   []
-  (when (zero? (swap! active-threads dec))
-    (advance!))
+  (inactivate!)
   (when (zero? (swap! all-threads dec))
     (deliver @completed nil)))
 
@@ -176,9 +229,18 @@
   and all-threads."
   [f]
   (swap! all-threads inc)
-  (swap! active-threads inc)
-  (.start (Thread. (fn [] (f) (thread-exit!))
-                   "timelike")))
+
+  ; We construct a temporary thread ID to prevent the scheduler from advancing
+  ; until our thread has registered itself as active.
+  (let [tmp-thread-id (str "newborn-" (swap! thread-count inc))]
+    (dosync (alter active-threads conj tmp-thread-id))
+    (.start (Thread. (fn [] 
+                       (.setName (Thread/currentThread) 
+                                 (str "timelike " (thread-id)))
+                       (activate!)
+                       (dosync (alter active-threads disj tmp-thread-id))
+                       (f)
+                       (thread-exit!))))))
 
 (defmacro thread
   "The basic threading macro. Starts a new virtual thread which executes all
@@ -188,15 +250,46 @@
      (bound-fn []
        (try ~@body
          (catch Throwable t#
-           (locking prn
-             (print-cause-trace t#)))))))
+           (send-off logger (fn [_#]
+                              (print-cause-trace t#))))))))
 
 (defn await-completion
   "Blocks until all threads have completed."
   []
   (deref @completed))
 
-(defmacro future
+(defmacro locking*
+  "Just like clojure's (locking): acquires a lock on x, then executes body,
+  then releases the lock. locking* differs in that it *also* allows the
+  scheduler to advance time when threads are blocked on a lock. If you don't
+  use locking*, a thread which acquires a lock then goes to sleep could prevent
+  other threads from completing: a deadlock.
+  
+  Warning: x *must* have valid hashCode() and equals(...) methods."
+  [x & body]
+  `(let [lockee# ~x
+         id# (thread-id)]
+
+     ; Signal that we're awaiting the lock.
+     (when (dosync
+             (alter locks-waiting assoc id# lockee#)
+             (can-advance?))
+       (advance!))
+     
+     ; Acquire lock and execute body
+     (locking lockee#
+       (try
+         (dosync
+           (alter locks-held assoc lockee# id#)
+           (alter locks-waiting dissoc id#)) 
+         ~@body
+
+         (finally
+           ; Release lock
+           (dosync
+             (alter locks-held dissoc lockee# id#)))))))
+
+(defmacro future*
   "Analogous to Clojure's future, but works with the virtual thread scheduler.
   Returns a promise immediately. Spawns a thread to execute body, and delivers
   the last value of the body to the promise when the thread completes."
@@ -206,3 +299,13 @@
        (deliver p#
                 (do ~@body)))
      p#))
+
+(defn deref*
+  "Analogous to deref, but marks this thread as inactive so long as it's
+  blocked. Allows the scheduler to proceed."
+  [x]
+  (inactivate!)
+  (try
+    (deref x)
+    (finally
+      (activate!))))

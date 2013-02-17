@@ -5,4 +5,5 @@
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :test-selectors {:default (constantly true)
                    :focus :focus}
-  :dependencies [[org.clojure/clojure "1.4.0"]])
+  :dependencies [[org.clojure/clojure "1.4.0"]
+                 [incanter/incanter-core "1.4.1"]])

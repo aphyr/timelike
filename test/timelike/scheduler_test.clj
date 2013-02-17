@@ -1,5 +1,5 @@
 (ns timelike.scheduler-test
-  (:refer-clojure :exclude [time future])
+  (:refer-clojure :exclude [time])
   (:use clojure.test
         timelike.scheduler))
 
@@ -84,6 +84,6 @@
            (is (not= @y @z))))
 
 (deftest future-test
-         (let [futures (map #(future (inc %)) [-5 10 2 -4 3])]
+         (let [futures (map #(future* (inc %)) [-5 10 2 -4 3])]
            (is (= (map deref futures) [-4 11 3 -3 4])))
          (await-completion)) 
