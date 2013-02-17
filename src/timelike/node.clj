@@ -4,7 +4,8 @@
                                  LinkedBlockingQueue
                                  LinkedTransferQueue
                                  TimeUnit))
-  (:use timelike.scheduler))
+  (:use timelike.scheduler
+        [incanter.distributions :only [draw exponential-distribution]]))
 
 ; A component in this system takes a request and returns a response. Both
 ; request and response are lists of maps. The history of a particular request
@@ -126,9 +127,9 @@
         (release idx)
         response))))
 
-(defn constant-load
-  "Every dt seconds, for a total of n requests, fires off a thread to apply req
-  to node. Returns a list of results."
+(defn interval-load
+  "Every (dt) seconds, for a total of n requests, fires off a thread to apply
+  (req) to node. Returns a list of results."
   [n dt req-generator node]
   (loop [i  0
          ps []]
@@ -139,10 +140,25 @@
         (thread
           (let [r (node (req-generator))]
             (deliver p r)))
-        (sleep dt)
+        (sleep (dt))
         (recur (inc i) ps))
       (do
         (doall (map deref* ps))))))
+
+(defn constant-load
+  "Every dt seconds, for a total of n requests, fires off a thread to apply req
+  to node. Returns a list of results."
+  [n dt req-generator node]
+  (interval-load n (constantly dt) req-generator node))
+
+(defn poisson-load
+  "A Poisson-distributed process: requests are uniformly distributed through
+  time and independent of each other. Fires off threads to apply (req) to the
+  given node. The mean time between events is exponentially distributed with
+  the given mean."
+  [n mean req-generator node]
+  (let [dist (exponential-distribution mean)]
+    (interval-load n #(draw dist) req-generator node)))
 
 (defn req
   "Create a request."

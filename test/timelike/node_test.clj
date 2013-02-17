@@ -42,9 +42,7 @@
   [name node]
   (println name)
   (let [results (future*
-                  (let [responses (constant-load n interval req node)]
-                    (node (shutdown))
-                    responses))]
+                  (poisson-load n interval req node))]
     (pstats @results) 
     (println)))
 
