@@ -70,13 +70,22 @@
   "A reference to a promise which is fulfilled once all threads have exited."
   (atom (promise)))
 
-(def barriers
+(defrecord Barrier [time thread-id ^CountDownLatch latch]
+  Comparable
+  (compareTo [a b]
+             (let [x (compare (.time a) (.time b))]
+               (if (zero? x)
+                 (compare (.thread-id a) (.thread-id b))
+                 x))))
+               
+(defn barrier
+  [time thread-id]
+  (Barrier. time thread-id (CountDownLatch. 1)))
+
+(def ^ConcurrentSkipListSet barriers
   "A mutable set of [time, id, latch] vectors. Latches are CountdownLatches
   which block threads; they are released when the scheduler reaches that time."
-  (ConcurrentSkipListSet.
-    (fn [[t1 id1 l1] [t2 id2 l2]]
-      (compare [t1 id1]
-               [t2 id2]))))
+  (ConcurrentSkipListSet.))
 
 (def thread-count
   (atom 0))
@@ -132,11 +141,11 @@
    (locking barriers
      (loop []
        ; Atomically remove all elements for the next timestamp.
-       (when-let [bs (when-let [b1 (.pollFirst barriers)]
+       (when-let [bs (when-let [^Barrier b1 (.pollFirst barriers)]
                        ; There *is* a next element.
                        (loop [bs (list b1)]
-                         (if-let [b (.pollFirst barriers)]
-                           (if (<= (first b) (first b1))
+                         (if-let [^Barrier b (.pollFirst barriers)]
+                           (if (<= (.time b) (.time b1))
                              ; Keep going
                              (recur (conj bs b))
                              ; Whoops, went too far, replace element
@@ -147,15 +156,15 @@
                            bs)))]
 
          ; OK, we've got a bunch of barriers. Advance the clock...
-         (swap! clock max (first (first bs)))
+         (swap! clock max (:time (first bs)))
 
          ; Mark that we're releasing these threads...
          (dosync
-           (alter active-threads union (set (map second bs))))
+           (alter active-threads union (set (map :thread-id bs))))
 
          ; LET LOOSE THE DOGS OF WAR
-         (doseq [[t id latch] bs]
-           (.countDown latch))
+         (doseq [^Barrier barrier bs]
+           (.countDown (:latch barrier)))
 
          ; Check for deadlock at this time and continue if necessary.
          (if (can-advance?)
@@ -188,20 +197,19 @@
   "Block the current thread until time t. If this is the sole remaining thread,
   triggers the advance! to the next scheduled time."
   [t]
-  (let [latch (CountDownLatch. 1)]
+  (let [barrier (barrier t (thread-id))]
     ; Schedule our awakening. Note that because ConcurrentSkipListMap is only
     ; weakly consistent, we need a lock to guarantee our insertion will be
     ; visible to any advancing threads. I should figure out a faster way to do
     ; this.
     (locking barriers
-      (.add barriers [t (thread-id) latch]))
+      (.add barriers barrier))
 
     ; Mark this thread as inactive (and possibly advance)
     (inactivate!)
 
     ; And block
-    (.await latch)
-    ))
+    (.await ^CountDownLatch (:latch barrier))))
 
 (defn sleep
   "Sleep for n seconds."
