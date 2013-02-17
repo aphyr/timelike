@@ -5,6 +5,7 @@
                                  LinkedTransferQueue
                                  TimeUnit))
   (:use timelike.scheduler
+        clojure.math.numeric-tower
         [incanter.distributions :only [draw exponential-distribution]]))
 
 ; A component in this system takes a request and returns a response. Both
@@ -28,6 +29,31 @@
 (def shutdown?
   "Does this request mean shut down?"
   (comp :shutdown first))
+
+(defn fixed-delay
+  "Sleeps for dt seconds, then calls downstream."
+  [dt downstream]
+  (fn [req]
+    (sleep dt)
+    (downstream req)))
+
+(defn exponential-delay
+  "Sleeps for an exponential number of seconds, then calls downstream. Mean is
+  the average time to delay, or 1/rate, or 1/lambda. All times rounded."
+  [mean downstream]
+  (let [dist (exponential-distribution (/ mean))]
+    (fn [req]
+      (sleep (round (draw dist)))
+      (downstream req))))
+
+(defn cable
+  "A network cable with fixed latency of dt seconds in both directions."
+  [dt downstream]
+  (fn [req]
+    (sleep dt)
+    (let [res (downstream req)]
+      (sleep dt)
+      res)))
 
 (defn mutex
   "Returns a transparent mutexed node which ensures requests are processed one
@@ -58,14 +84,11 @@
       (sleep dt)
       (conj req {:node name :time (time)})))
 
-(defn exponential-server
-  "A node which sleeps for an exponentially distributed number of seconds
-  before returning. Mean is the inverse of rate."
-  [name mean]
-  (let [dist (exponential-distribution (/ mean))]
-        (fn [req]
-          (sleep (draw dist))
-          (conj req {:node name :time (time)}))))
+(defn server
+  "A node which returns a response."
+  [name]
+  (fn [req]
+    (conj req {:node name :time (time)})))
 
 (defmacro pool
   "Evaluates body n times and returns a vector of the results."
@@ -169,7 +192,7 @@
   given node. The average rate lambda is 1/mean."
   [n mean req-generator node]
   (let [dist (exponential-distribution (/ mean))]
-    (interval-load n #(draw dist) req-generator node)))
+    (interval-load n #(round (draw dist)) req-generator node)))
 
 (defn req
   "Create a request."
@@ -181,8 +204,27 @@
   []
   [{:time (time) :shutdown true}]) 
 
+(defn first-time
+  "When did this request originate?"
+  [req]
+  (:time (first req)))
+
+(defn last-time
+  "When was this request completed?"
+  [req]
+  (apply max (map :time req)))
+
 (defn latency 
   "The difference between the request's first time and the maximum time"
   [req]
-  (- (apply max (map :time req)) 
+  (- (last-time req)
      (:time (first req))))
+
+(defn throughput
+  "The mean throughput of a sequence of requests."
+  [reqs]
+  (let [finishes (map last-time reqs)
+        t0       (apply min finishes)
+        t1       (apply max finishes)
+        dt       (- t1 t0)]
+    (/ (count reqs) dt)))

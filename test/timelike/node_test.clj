@@ -22,11 +22,21 @@
 (use-fixtures :each reset-test!)
 
 (defn pstats
+  "Print statistics. We examing only the middle half of the request set, to
+  avoid measuring ramp-up and draining dynamics."
   [reqs]
   (println)
-  (let [latencies (map latency reqs)
+  (let [n          (count reqs)
+        reqs       (->> reqs
+                     (drop (/ n 4))
+                     (take (/ n 2)))
+        latencies  (map latency reqs)
+        throughput (throughput reqs)
         [q0 q5 q95 q99 q1] (quantile latencies :probs [0 0.5 0.95 0.99 1])]
-    (println "Total reqs:" (count reqs))
+    (println "Total reqs:    " n)
+    (println "Selected reqs: " (count reqs)) 
+    (println "Throughput:    " (float (* 1000 throughput)) "reqs/s")
+
     (println "Latency distribution:")
     (println "Min:    " q0)
     (println "Median: " q5)
@@ -37,7 +47,6 @@
 (def n 10000)
 (def interval 1)
 (def pool-size 250)
-(def server-time 200)
 
 (defn test-node
   [name node]
@@ -47,29 +56,36 @@
     (pstats @results) 
     (println)))
 
+(defn backend
+  "A singlethreaded, request-queuing server, with a fixed per-request
+  overhead plus an exponentially distributed time to process the request,
+  connected by a short network cable."
+  []
+  (cable 2 
+    (exclusive-queue
+      (fixed-delay 20
+        (exponential-delay 100 
+          (server :rails))))))
+
+(defn backends
+  "A pool of n backends"
+  [n]
+  (pool n (backend)))
+
 (deftest random-test
          (test-node "Random LB"
-                    (random-lb :lb
-                               (pool pool-size
-                                     (exclusive-queue
-                                       (exponential-server :rails server-time))))))
+                    (random-lb :lb (backends pool-size))))
 
 (deftest rr-test
          (test-node "Round-robin LB"
-                    (rr-lb :lb
-                           (pool pool-size
-                                 (exclusive-queue
-                                   (exponential-server :rails server-time))))))
+                    (rr-lb :lb (backends pool-size))))
 
 (deftest random-even-test
          (test-node "Random -> 10 even LBs -> One pool"
-                    (let [backends (pool pool-size
-                                         (exclusive-queue
-                                           (exponential-server 
-                                             :rails server-time)))]
+                    (let [backends (backends pool-size)]
                       (random-lb :dist
-                                 (pool 10
-                                       (even-conn-lb :sub backends))))))
+                        (pool 10 
+                          (even-conn-lb :sub backends))))))
 
 (deftest random-even-disjoint-test
          (assert (zero? (mod pool-size 10)))
@@ -77,16 +93,9 @@
            "Random -> 10 even LBs -> 10 disjoint pools"
            (random-lb :dist
                       (pool 10
-                            (even-conn-lb :sub
-                                     (pool (/ pool-size 10)
-                                           (exclusive-queue
-                                             (exponential-server
-                                               :rails server-time))))))))
+                        (even-conn-lb :sub
+                          (backends (/ pool-size 10)))))))
 
 (deftest even-conn-test
          (test-node "Even connections LB"
-                    (even-conn-lb :even
-                                  (pool pool-size
-                                        (exclusive-queue
-                                          (exponential-server
-                                            :rails server-time))))))
+                    (even-conn-lb :even (backends pool-size))))

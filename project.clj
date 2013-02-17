@@ -6,4 +6,5 @@
   :test-selectors {:default (constantly true)
                    :focus :focus}
   :dependencies [[org.clojure/clojure "1.4.0"]
+                 [org.clojure/math.numeric-tower "0.0.1"]
                  [incanter/incanter-core "1.4.1"]])
