@@ -33,9 +33,9 @@
   "Returns a transparent mutexed node which ensures requests are processed one
   at a time--but makes no ordering guarantees."
   [downstream]
-  (let [o (Object.)]
+  (let [lock (lock)]
     (fn [req]
-      (locking* o
+      (locking* lock
         (downstream req)))))
 
 (defn exclusive-queue
@@ -44,7 +44,7 @@
   worker thread."
   [downstream]
   (let [q (LinkedBlockingQueue.)
-        lock (Object.)]
+        lock (lock)]
     (fn [req]
       (.put q req)
       (locking* lock
@@ -148,6 +148,9 @@
         ; Execute request in a new thread
         (thread
           (let [r (node (req-generator))]
+            (when (zero? (mod i 1000)) 
+              (print ".")
+              (flush))
             (deliver p r)))
         (sleep (dt))
         (recur (inc i) ps))

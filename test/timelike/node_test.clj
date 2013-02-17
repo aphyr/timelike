@@ -23,6 +23,7 @@
 
 (defn pstats
   [reqs]
+  (println)
   (let [latencies (map latency reqs)
         [q0 q5 q95 q99 q1] (quantile latencies :probs [0 0.5 0.95 0.99 1])]
     (println "Total reqs:" (count reqs))

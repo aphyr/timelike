@@ -110,16 +110,13 @@
   thread, we may proceed to the next time."
   []
   (dosync
-    (or (empty? (ensure active-threads))
-        (let [held    (ensure locks-held)
-              waiting (ensure locks-waiting)
-              active  @active-threads
-              blocked (set (keep (fn [[waiter obj]]
-                                   (when-let [holder (held obj)]
-                                     (when (not= holder waiter)
-                                       waiter)))
-                                 waiting))]
-          (every? blocked active)))))
+    ; Try to find a scheduling conflict: an active thread which is not waiting
+    ; on a lock owned by a different thread.
+    (every?
+      (fn [thread]
+        (when-let [obj ((ensure locks-waiting) thread)]
+          (not= thread ((ensure locks-held) obj))))
+      (ensure active-threads))))
 
 (defn advance!
   "Advances the clock to the next time barrier, and releases all threads at
@@ -289,6 +286,15 @@
            ; Release lock
            (dosync
              (alter locks-held dissoc lockee# id#)))))))
+
+(def lock-id
+  (atom 0))
+(defn lock
+  "You can use any object with locking*, but since the scheduler does many
+  hashcode lookups, using objects with fast hashcodes can be faster. This
+  function just returns unique Longs."
+  []
+  (swap! lock-id inc)) 
 
 (defmacro future*
   "Analogous to Clojure's future, but works with the virtual thread scheduler.
