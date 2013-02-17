@@ -1,6 +1,7 @@
 (ns timelike.node
   (:refer-clojure :exclude [time future])
   (:import (java.util.concurrent ConcurrentSkipListSet
+                                 CountDownLatch
                                  LinkedBlockingQueue
                                  LinkedTransferQueue
                                  TimeUnit))
@@ -118,16 +119,35 @@
 
 (defn exclusive-queue
   "Wraps a node in a queue which can only process one message at a time. Each
-  call to this node enqueues a request on the queue, which is processed by a
-  worker thread."
+  call to this node enters a queue; the thread blocks until its turn arrives,
+  and then it calls (downstream req)."
   [downstream]
-  (let [q (LinkedBlockingQueue.)
-        lock (lock)]
+  (let [queue (LinkedBlockingQueue.)]
     (fn [req]
-      (.put q req)
-      (locking* lock
-        (let [r2 (.poll q)]
-          (downstream r2))))))
+      (let [latch (CountDownLatch. 1)
+            pair  [(thread-id) latch]]
+
+        ; LMAO if you are smart enough to do this with CAS memory effects only
+        (when-not (locking queue
+                    (.put queue pair)
+                    (= pair (.peek queue)))
+          ; We're not the first. GO TO SLEEEP.
+          (inactivate!)
+          (.await latch))
+
+        ; Execute request.
+        (let [res (downstream req)]
+
+          ; We're at the head of the queue; remove ourselves
+          ; and check for a successor.
+          (when-let [pair2 (locking queue
+                             (assert (= pair (.poll queue)))
+                             (.peek queue))]
+              ; Activate our successor and allow them to continue.
+              (activate! (first pair2))
+              (.countDown (second pair2)))
+
+          res)))))
 
 (defn constant-server
   "A node which sleeps for a fixed number of seconds before returning."

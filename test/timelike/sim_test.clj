@@ -44,7 +44,7 @@
     (println "99th %: " q99)
     (println "Max:    " q1)))
  
-(def n 10000)
+(def n 100000)
 (def interval 1)
 (def pool-size 250)
 

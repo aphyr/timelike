@@ -177,14 +177,14 @@
   (when (dosync
           (alter active-threads disj (thread-id))
           (can-advance?))
-    (advance!))
-  )
+    (advance!)))
 
 (defn activate!
-  "Called when a thread goes active."
-  []
-  (dosync
-    (alter active-threads conj (thread-id))))
+  "Mark a thread as active."
+  ([] (activate! (thread-id)))
+  ([id]
+   (dosync
+     (alter active-threads conj id))))
 
 (defmacro simultaneous
   "Ensures that the scheduler does not advance! for the duration of the body.
