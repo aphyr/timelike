@@ -270,7 +270,7 @@
             (when (zero? (mod i 1000)) 
               (print ".")
               (flush))
-            (deliver p r)))
+            (deliver p (conj r {:node :load-interval :time (time)}))))
         (sleep (dt))
         (recur (inc i) ps))
       (do
