@@ -185,21 +185,22 @@
      (fn [i#] ~@body)
      (range ~n)))
 
-(defn lb
-  "A load balancer. Takes a node name and a function which returns a backend,
-  and uses that function to distribute requests to backends."
-  [name claim-fn release-fn]
-  (fn [req]
-    ((claim-fn) (conj req {:node name :time (time)}))))
+(defn wrap-req
+  "Takes a node name, a downstream node, and a request object. Adds {:name name
+  :time (time)} to request, applies it to the downstream node, then adds the
+  name and time again on the way back."
+  [name downstream req]
+  (let [req  (conj req {:node name :time (time)})
+        resp (downstream req)]
+    (conj resp {:node name :time (time)})))
 
 (defn lb-random
   "A random load balancer. Takes a pool and distributes requests to a randomly
   selected member."
   ([pool] (lb-random :lb-random pool))
   ([name pool]
-   (lb name 
-       #(nth pool (rand (count pool)))
-       identity)))
+   (fn [req]
+     (wrap-req name (nth pool (rand (count pool))) req))))
 
 (defn lb-rr
   "A round-robin load balancer. Takes a pool and distributes subsequent
@@ -207,11 +208,11 @@
   ([pool] (lb-rr :lb-rr pool))
   ([name pool]
    (let [i (atom 0)]
-     (lb name 
-         (fn []
-           (nth pool 
-                (swap! i #(mod (inc %) (count pool)))))
-         identity))))
+     (fn [req]
+       (wrap-req name
+                 (nth pool
+                      (swap! i #(mod (inc %) (count pool))))
+                 req)))))
 
 (defn lb-min-conn
   "A load balancer which tries to evenly distribute connections over backends."
@@ -248,11 +249,11 @@
                                (disj conn)
                                (conj [(dec (first conn)) idx]))))))]
     (fn [req]
-      (let [idx (acquire)
+      (let [idx     (acquire)
             backend (nth pool idx)
-            response (backend req)]
+            resp    (wrap-req name backend req)]
         (release idx)
-        response)))))
+        resp)))))
 
 (defn load-interval
   "Every (dt) seconds, for a total of n requests, fires off a thread to apply
