@@ -48,7 +48,7 @@
     (println "99th %: " q99)
     (println "Max:    " q1)))
  
-(def n 20000)
+(def n 100000)
 (def interval 1)
 (def pool-size 250)
 
@@ -70,6 +70,16 @@
       (delay-fixed 20
         (delay-exponential 100 
           (server :rails))))))
+
+(defn faulty-dyno
+  "Like a dyno, but only 90% available."
+  []
+  (cable 2
+    (faulty 20000 1000
+      (queue-exclusive
+        (delay-fixed 20
+          (delay-exponential 100
+            (server :rails)))))))
 
 (defn dynos
   "A pool of n dynos"
@@ -96,7 +106,7 @@
              (dynos pool-size))))
 
 (deftest ^:simple min-conn-test
-         (test-node "Even connections LB"
+         (test-node "Min-conn LB"
            (lb-min-conn
              (dynos pool-size))))
 
@@ -119,8 +129,14 @@
 (deftest ^:bamboo bamboo-16
          (bamboo-test 16))
 
-(deftest random-even-test
-         (test-node "Random -> 10 even LBs -> One pool"
+(deftest ^:faulty min-conn-faulty-test
+         (test-node "Reliable min-conn -> pool of faulty dynos."
+           (lb-min-conn
+             (pool pool-size
+               (faulty-dyno)))))
+
+(deftest random-min-conn-test
+         (test-node "Random -> 10 min-conn LBs -> One pool"
            (let [dynos (dynos pool-size)]
              (lb-random
                (pool 10 
@@ -128,19 +144,19 @@
                    (lb-min-conn
                      dynos)))))))
 
-(deftest random-even-disjoint-test
+(deftest random-min-conn-disjoint-test
          (assert (zero? (mod pool-size 10)))
          (test-node 
-           "Random -> 10 even LBs -> 10 disjoint pools"
+           "Random -> 10 min-conn LBs -> 10 disjoint pools"
            (lb-random
              (pool 10
                (cable 5
                  (lb-min-conn
                    (dynos (/ pool-size 10))))))))
 
-(deftest random-faulty-even-disjoint
+(deftest random-faulty-min-conn-disjoint
          (assert (zero? (mod pool-size 10)))
-         (test-node "Random -> 10 even (faulty) LBs -> one pool"
+         (test-node "Random -> 10 min-conn (faulty) LBs -> one pool"
            (retry 3
              (lb-random
                (pool 10

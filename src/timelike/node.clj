@@ -188,11 +188,13 @@
 (defn wrap-req
   "Takes a node name, a downstream node, and a request object. Adds {:name name
   :time (time)} to request, applies it to the downstream node, then adds the
-  name and time again on the way back."
+  name and time again on the way back. Propagates errors."
   [name downstream req]
   (let [req  (conj req {:node name :time (time)})
         resp (downstream req)]
-    (conj resp {:node name :time (time)})))
+    (conj resp {:node name
+                :error (error? resp)
+                :time (time)})))
 
 (defn lb-random
   "A random load balancer. Takes a pool and distributes requests to a randomly
@@ -270,7 +272,9 @@
             (when (zero? (mod i 1000)) 
               (print ".")
               (flush))
-            (deliver p (conj r {:node :load-interval :time (time)}))))
+            (deliver p (conj r {:node :load-interval 
+                                :error (error? r)
+                                :time (time)}))))
         (sleep (dt))
         (recur (inc i) ps))
       (do
