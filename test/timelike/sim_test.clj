@@ -89,7 +89,7 @@
            (let [backends (backends pool-size)]
              (random-lb :dist
                (pool 10 
-                 (even-conn-lb :sub
+                 (min-conn-lb :sub
                    backends))))))
 
 (deftest random-even-disjoint-test
@@ -98,10 +98,10 @@
            "Random -> 10 even LBs -> 10 disjoint pools"
            (random-lb :dist
              (pool 10
-               (even-conn-lb :sub
+               (min-conn-lb :sub
                  (backends (/ pool-size 10)))))))
 
 (deftest even-conn-test
          (test-node "Even connections LB"
-           (even-conn-lb :even 
+           (min-conn-lb :even 
              (backends pool-size))))

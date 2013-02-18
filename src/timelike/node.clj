@@ -149,18 +149,12 @@
 
           res)))))
 
-(defn constant-server
-  "A node which sleeps for a fixed number of seconds before returning."
-  [name dt]
-  (fn [req]
-      (sleep dt)
-      (conj req {:node name :time (time)})))
-
 (defn server
   "A node which returns a response."
-  [name]
-  (fn [req]
-    (conj req {:node name :time (time)})))
+  ([] (server :server))
+  ([name]
+   (fn [req]
+     (conj req {:node name :time (time)}))))
 
 (defn faulty
   "A node which toggles between OK and failure modes. In its failure state, it
@@ -194,28 +188,35 @@
 (defn lb
   "A load balancer. Takes a node name and a function which returns a backend,
   and uses that function to distribute requests to backends."
-  [name backend-fn]
+  [name claim-fn release-fn]
   (fn [req]
-    ((backend-fn) (conj req {:node name :time (time)}))))
+    ((claim-fn) (conj req {:node name :time (time)}))))
 
 (defn random-lb
   "A random load balancer. Takes a pool and distributes requests to a randomly
   selected member."
-  [name pool]
-  (lb name #(nth pool (rand (count pool)))))
+  ([pool] (random-lb :random-lb pool))
+  ([name pool]
+   (lb name 
+       #(nth pool (rand (count pool)))
+       identity)))
 
 (defn rr-lb
   "A round-robin load balancer. Takes a pool and distributes subsequent
   requests to subsequent backends."
-  [name pool]
-  (let [i (atom 0)]
-    (lb name (fn []
-               (nth pool 
-                    (swap! i #(mod (inc %) (count pool))))))))
+  ([pool] (rr-lb :rr-lb pool))
+  ([name pool]
+   (let [i (atom 0)]
+     (lb name 
+         (fn []
+           (nth pool 
+                (swap! i #(mod (inc %) (count pool)))))
+         identity))))
 
-(defn even-conn-lb
+(defn min-conn-lb
   "A load balancer which tries to evenly distribute connections over backends."
-  [name pool]
+  ([pool] (min-conn-lb :min-conn-lb pool))
+  ([name pool]
   (let [conns (atom (apply sorted-set
                            (map (fn [idx] [0 idx])
                                 (range (count pool)))))
@@ -251,7 +252,7 @@
             backend (nth pool idx)
             response (backend req)]
         (release idx)
-        response))))
+        response)))))
 
 (defn interval-load
   "Every (dt) seconds, for a total of n requests, fires off a thread to apply
