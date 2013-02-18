@@ -48,7 +48,7 @@
     (println "99th %: " q99)
     (println "Max:    " q1)))
  
-(def n 40000)
+(def n 20000)
 (def interval 1)
 (def pool-size 250)
 
@@ -60,7 +60,7 @@
     (pstats @results) 
     (println)))
 
-(defn backend
+(defn dyno
   "A singlethreaded, request-queuing server, with a fixed per-request
   overhead plus an exponentially distributed time to process the request,
   connected by a short network cable."
@@ -71,36 +71,64 @@
         (delay-exponential 100 
           (server :rails))))))
 
-(defn backends
-  "A pool of n backends"
+(defn dynos
+  "A pool of n dynos"
   [n]
-  (pool n (backend)))
+  (pool n (dyno)))
 
-(deftest random-test
+(deftest ^:focus single-dyno-test
+         (let [responses (future*
+                           (load-poisson 10000 150 req (dyno)))]
+           (println "A single dyno")
+           (println)
+           (prn (first @responses))
+           (pstats @responses)
+           (println)))
+
+(deftest ^:simple random-test
          (test-node "Random LB"
            (lb-random 
-             (backends pool-size))))
+             (dynos pool-size))))
 
-(deftest rr-test
+(deftest ^:simple rr-test
          (test-node "Round-robin LB"
            (lb-rr 
-             (backends pool-size))))
+             (dynos pool-size))))
 
-(deftest min-conn-test
+(deftest ^:simple min-conn-test
          (test-node "Even connections LB"
            (lb-min-conn
-             (backends pool-size))))
+             (dynos pool-size))))
+
+(defn bamboo-test
+  [n]
+  (test-node (str "Bamboo with " n " routers")
+     (let [dynos (dynos pool-size)]
+       (lb-random
+         (pool n
+           (cable 5
+             (lb-min-conn
+               dynos)))))))
+
+(deftest ^:bamboo bamboo-2
+         (bamboo-test 2))
+(deftest ^:bamboo bamboo-4
+         (bamboo-test 4))
+(deftest ^:bamboo bamboo-8
+         (bamboo-test 8))
+(deftest ^:bamboo bamboo-16
+         (bamboo-test 16))
 
 (deftest random-even-test
          (test-node "Random -> 10 even LBs -> One pool"
-           (let [backends (backends pool-size)]
+           (let [dynos (dynos pool-size)]
              (lb-random
                (pool 10 
                  (cable 5
                    (lb-min-conn
-                     backends)))))))
+                     dynos)))))))
 
-(deftest ^:focus random-even-disjoint-test
+(deftest random-even-disjoint-test
          (assert (zero? (mod pool-size 10)))
          (test-node 
            "Random -> 10 even LBs -> 10 disjoint pools"
@@ -108,9 +136,9 @@
              (pool 10
                (cable 5
                  (lb-min-conn
-                   (backends (/ pool-size 10))))))))
+                   (dynos (/ pool-size 10))))))))
 
-(deftest ^:focus random-faulty-even-disjoint
+(deftest random-faulty-even-disjoint
          (assert (zero? (mod pool-size 10)))
          (test-node "Random -> 10 even (faulty) LBs -> one pool"
            (retry 3
@@ -119,4 +147,4 @@
                  (cable 5
                    (faulty 100 10
                      (lb-min-conn
-                       (backends (/ pool-size 10))))))))))
+                       (dynos (/ pool-size 10))))))))))
