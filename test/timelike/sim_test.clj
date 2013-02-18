@@ -49,7 +49,7 @@
     (println "Max:    " q1)))
  
 (def n 100000)
-(def interval 1)
+(def interval 1.5)
 (def pool-size 250)
 
 (defn test-node
@@ -140,6 +140,13 @@
            (lb-min-conn :lb {:error-hold-time 1000}
              (pool pool-size
                (faulty-dyno)))))
+
+(deftest ^:faulty retry-min-conn-faulty-test
+         (test-node "Retry -> min-conn -> faulty pool"
+           (retry 3
+             (lb-min-conn :lb {:error-hold-time 1000}
+               (pool pool-size
+                 (faulty-dyno))))))
 
 (deftest random-min-conn-test
          (test-node "Random -> 10 min-conn LBs -> One pool"
