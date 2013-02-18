@@ -83,14 +83,14 @@
                      (conj err {:retry i 
                                 :time (time)}))))))))
 
-(defn fixed-delay
+(defn delay-fixed
   "Sleeps for dt seconds, then calls downstream."
   [dt downstream]
   (fn [req]
     (sleep dt)
     (downstream req)))
 
-(defn exponential-delay
+(defn delay-exponential
   "Sleeps for an exponential number of seconds, then calls downstream. Mean is
   the average time to delay, or 1/rate, or 1/lambda. All times rounded."
   [mean downstream]
@@ -117,7 +117,7 @@
       (locking* lock
         (downstream req)))))
 
-(defn exclusive-queue
+(defn queue-exclusive
   "Wraps a node in a queue which can only process one message at a time. Each
   call to this node enters a queue; the thread blocks until its turn arrives,
   and then it calls (downstream req)."
@@ -192,19 +192,19 @@
   (fn [req]
     ((claim-fn) (conj req {:node name :time (time)}))))
 
-(defn random-lb
+(defn lb-random
   "A random load balancer. Takes a pool and distributes requests to a randomly
   selected member."
-  ([pool] (random-lb :random-lb pool))
+  ([pool] (lb-random :lb-random pool))
   ([name pool]
    (lb name 
        #(nth pool (rand (count pool)))
        identity)))
 
-(defn rr-lb
+(defn lb-rr
   "A round-robin load balancer. Takes a pool and distributes subsequent
   requests to subsequent backends."
-  ([pool] (rr-lb :rr-lb pool))
+  ([pool] (lb-rr :lb-rr pool))
   ([name pool]
    (let [i (atom 0)]
      (lb name 
@@ -213,9 +213,9 @@
                 (swap! i #(mod (inc %) (count pool)))))
          identity))))
 
-(defn min-conn-lb
+(defn lb-min-conn
   "A load balancer which tries to evenly distribute connections over backends."
-  ([pool] (min-conn-lb :min-conn-lb pool))
+  ([pool] (lb-min-conn :lb-minn-conn pool))
   ([name pool]
   (let [conns (atom (apply sorted-set
                            (map (fn [idx] [0 idx])
@@ -254,7 +254,7 @@
         (release idx)
         response)))))
 
-(defn interval-load
+(defn load-interval
   "Every (dt) seconds, for a total of n requests, fires off a thread to apply
   (req) to node. Returns a list of results."
   [n dt req-generator node]
@@ -275,19 +275,19 @@
       (do
         (doall (map deref* ps))))))
 
-(defn constant-load
+(defn load-constant
   "Every dt seconds, for a total of n requests, fires off a thread to apply req
   to node. Returns a list of results."
   [n dt req-generator node]
-  (interval-load n (constantly dt) req-generator node))
+  (load-interval n (constantly dt) req-generator node))
 
-(defn poisson-load
+(defn load-poisson
   "A Poisson-distributed process: requests are uniformly distributed through
   time and independent of each other. Fires off threads to apply (req) to the
   given node. The average rate lambda is 1/mean."
   [n mean req-generator node]
   (let [dist (exponential-distribution (/ mean))]
-    (interval-load n #(round (draw dist)) req-generator node)))
+    (load-interval n #(round (draw dist)) req-generator node)))
 
 (defn req
   "Create a request."

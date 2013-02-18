@@ -54,7 +54,7 @@
   [name node]
   (println name)
   (let [results (future*
-                  (poisson-load n interval req node))]
+                  (load-poisson n interval req node))]
     (pstats @results) 
     (println)))
 
@@ -64,9 +64,9 @@
   connected by a short network cable."
   []
   (cable 2 
-    (exclusive-queue
-      (fixed-delay 20
-        (exponential-delay 100 
+    (queue-exclusive
+      (delay-fixed 20
+        (delay-exponential 100 
           (server :rails))))))
 
 (defn backends
@@ -76,32 +76,32 @@
 
 (deftest random-test
          (test-node "Random LB"
-           (random-lb :lb
+           (lb-random 
              (backends pool-size))))
 
 (deftest rr-test
          (test-node "Round-robin LB"
-           (rr-lb :lb
+           (lb-rr 
              (backends pool-size))))
 
 (deftest random-even-test
          (test-node "Random -> 10 even LBs -> One pool"
            (let [backends (backends pool-size)]
-             (random-lb :dist
+             (lb-random 
                (pool 10 
-                 (min-conn-lb :sub
+                 (lb-min-conn
                    backends))))))
 
 (deftest random-even-disjoint-test
          (assert (zero? (mod pool-size 10)))
          (test-node 
            "Random -> 10 even LBs -> 10 disjoint pools"
-           (random-lb :dist
+           (lb-random
              (pool 10
-               (min-conn-lb :sub
+               (lb-min-conn
                  (backends (/ pool-size 10)))))))
 
-(deftest even-conn-test
+(deftest min-conn-test
          (test-node "Even connections LB"
-           (min-conn-lb :even 
+           (lb-min-conn
              (backends pool-size))))
