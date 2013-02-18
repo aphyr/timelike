@@ -217,45 +217,56 @@
                  req)))))
 
 (defn lb-min-conn
-  "A load balancer which tries to evenly distribute connections over backends."
+  "A load balancer which tries to evenly distribute connections over backends.
+  Options:
+  
+  :error-hold-time  When we encounter an error for a backend, only decrement
+                    that node's connection count after waiting this long."
   ([pool] (lb-min-conn :lb-minn-conn pool))
-  ([name pool]
-  (let [conns (atom (apply sorted-set
-                           (map (fn [idx] [0 idx])
-                                (range (count pool)))))
-        ; Grab a connection.
-        acquire (fn acquire []
-                  (let [a (atom nil)]
-                    (swap! conns
-                           (fn acquire-swap [conns]
-                             (let [[count idx :as conn] (first conns)
-                                   conns (-> conns
-                                           (disj conn)
-                                           (conj [(inc count) idx]))] 
-                               (reset! a idx)
-                               conns)))
-                    @a))
-        
-        ; Release a connection.
-        release (fn release [idx]
-                  ; For reasonably loaded clusters, it's probably faster to
-                  ; just iterate through the possible conn values at O(k * log
-                  ; n) vs linear search at O(n)
-                  (swap! conns
-                         (fn release-swap [conns]
-                           (let [conn (first 
-                                        (filter (comp (partial = idx) second)
-                                                conns))]
-                             (assert conn)
-                             (-> conns
-                               (disj conn)
-                               (conj [(dec (first conn)) idx]))))))]
-    (fn [req]
-      (let [idx     (acquire)
-            backend (nth pool idx)
-            resp    (wrap-req name backend req)]
-        (release idx)
-        resp)))))
+  ([name pool] (lb-min-conn name {} pool))
+  ([name opts pool]
+   (let [error-hold-time (get opts :error-hold-time 0)
+         conns (atom (apply sorted-set
+                            (map (fn [idx] [0 idx])
+                                 (range (count pool)))))
+         ; Grab a connection.
+         acquire (fn acquire []
+                   (let [a (atom nil)]
+                     (swap! conns
+                            (fn acquire-swap [conns]
+                              (let [[count idx :as conn] (first conns)
+                                    conns (-> conns
+                                            (disj conn)
+                                            (conj [(inc count) idx]))] 
+                                (reset! a idx)
+                                conns)))
+                     @a))
+
+         ; Release a connection.
+         release (fn release [idx]
+                   ; For reasonably loaded clusters, it's probably faster to
+                   ; just iterate through the possible conn values at O(k * log
+                   ; n) vs linear search at O(n)
+                   (swap! conns
+                          (fn release-swap [conns]
+                            (let [conn (first 
+                                         (filter (comp (partial = idx) second)
+                                                 conns))]
+                              (assert conn)
+                              (-> conns
+                                (disj conn)
+                                (conj [(dec (first conn)) idx]))))))]
+     (fn [req]
+       (let [idx     (acquire)
+             backend (nth pool idx)
+             resp    (wrap-req name backend req)]
+         (if (error? resp)
+           (thread
+             ; Broken backend? Wait for a while before releasing.
+             (sleep error-hold-time)
+             (release idx))
+           (release idx))
+         resp)))))
 
 (defn load-interval
   "Every (dt) seconds, for a total of n requests, fires off a thread to apply

@@ -86,7 +86,7 @@
   [n]
   (pool n (dyno)))
 
-(deftest ^:focus single-dyno-test
+(deftest single-dyno-test
          (let [responses (future*
                            (load-poisson 10000 150 req (dyno)))]
            (println "A single dyno")
@@ -130,8 +130,14 @@
          (bamboo-test 16))
 
 (deftest ^:faulty min-conn-faulty-test
-         (test-node "Reliable min-conn -> pool of faulty dynos."
+         (test-node "Min-conn -> pool of faulty dynos."
            (lb-min-conn
+             (pool pool-size
+               (faulty-dyno)))))
+
+(deftest ^:faulty ^:focus min-conn-faulty-test-2
+         (test-node "Min-conn with 1s error hold time -> pool of faulty dynos."
+           (lb-min-conn :lb {:error-hold-time 1000}
              (pool pool-size
                (faulty-dyno)))))
 
