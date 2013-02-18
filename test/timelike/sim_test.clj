@@ -34,10 +34,12 @@
         response-rate (response-rate reqs)
         request-rate  (request-rate reqs)
         [q0 q5 q95 q99 q1] (quantile latencies :probs [0 0.5 0.95 0.99 1])]
-    (println "Total reqs:    " n)
-    (println "Selected reqs: " (count reqs)) 
-    (println "Request rate:  " (float (* 1000 request-rate))  "reqs/s")
-    (println "Response rate: " (float (* 1000 response-rate)) "reqs/s")
+    (println "Total reqs:      " n)
+    (println "Selected reqs:   " (count reqs)) 
+    (println "Successful frac: " (float (/ (count (remove error? reqs))
+                                         (count reqs))))
+    (println "Request rate:    " (float (* 1000 request-rate))  "reqs/s")
+    (println "Response rate:   " (float (* 1000 response-rate)) "reqs/s")
 
     (println "Latency distribution:")
     (println "Min:    " q0)
@@ -46,7 +48,7 @@
     (println "99th %: " q99)
     (println "Max:    " q1)))
  
-(def n 10000)
+(def n 40000)
 (def interval 1)
 (def pool-size 250)
 
@@ -84,24 +86,37 @@
            (lb-rr 
              (backends pool-size))))
 
+(deftest min-conn-test
+         (test-node "Even connections LB"
+           (lb-min-conn
+             (backends pool-size))))
+
 (deftest random-even-test
          (test-node "Random -> 10 even LBs -> One pool"
            (let [backends (backends pool-size)]
-             (lb-random 
+             (lb-random
                (pool 10 
-                 (lb-min-conn
-                   backends))))))
+                 (cable 5
+                   (lb-min-conn
+                     backends)))))))
 
-(deftest random-even-disjoint-test
+(deftest ^:focus random-even-disjoint-test
          (assert (zero? (mod pool-size 10)))
          (test-node 
            "Random -> 10 even LBs -> 10 disjoint pools"
            (lb-random
              (pool 10
-               (lb-min-conn
-                 (backends (/ pool-size 10)))))))
+               (cable 5
+                 (lb-min-conn
+                   (backends (/ pool-size 10))))))))
 
-(deftest min-conn-test
-         (test-node "Even connections LB"
-           (lb-min-conn
-             (backends pool-size))))
+(deftest ^:focus random-faulty-even-disjoint
+         (assert (zero? (mod pool-size 10)))
+         (test-node "Random -> 10 even (faulty) LBs -> one pool"
+           (retry 3
+             (lb-random
+               (pool 10
+                 (cable 5
+                   (faulty 100 10
+                     (lb-min-conn
+                       (backends (/ pool-size 10))))))))))
