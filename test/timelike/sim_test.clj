@@ -135,7 +135,7 @@
              (pool pool-size
                (faulty-dyno)))))
 
-(deftest ^:faulty ^:focus min-conn-faulty-test-2
+(deftest ^:faulty min-conn-faulty-test-hold
          (test-node "Min-conn with 1s error hold time -> pool of faulty dynos."
            (lb-min-conn :lb {:error-hold-time 1000}
              (pool pool-size
@@ -148,32 +148,39 @@
                (pool pool-size
                  (faulty-dyno))))))
 
-(deftest random-min-conn-test
-         (test-node "Random -> 10 min-conn LBs -> One pool"
-           (let [dynos (dynos pool-size)]
-             (lb-random
-               (pool 10 
-                 (cable 5
-                   (lb-min-conn
-                     dynos)))))))
+(defn faulty-lb
+  [pool]
+  (faulty 20000 1000
+    (retry 3
+      (lb-min-conn :lb {:error-hold-time 1000}
+        pool))))
 
-(deftest random-min-conn-disjoint-test
-         (assert (zero? (mod pool-size 10)))
-         (test-node 
-           "Random -> 10 min-conn LBs -> 10 disjoint pools"
-           (lb-random
-             (pool 10
-               (cable 5
-                 (lb-min-conn
-                   (dynos (/ pool-size 10))))))))
+(deftest ^:distributed random-faulty-lb-test
+  (test-node "Random -> 10 faulty lbs -> One pool"
+    (let [dynos (pool pool-size (faulty-dyno))]
+      (lb-random
+        (pool 10
+          (cable 5
+            (faulty-lb
+              dynos)))))))
 
-(deftest random-faulty-min-conn-disjoint
-         (assert (zero? (mod pool-size 10)))
-         (test-node "Random -> 10 min-conn (faulty) LBs -> one pool"
-           (retry 3
-             (lb-random
-               (pool 10
-                 (cable 5
-                   (faulty 100 10
-                     (lb-min-conn
-                       (dynos (/ pool-size 10))))))))))
+(deftest ^:distributed retry-random-faulty-lb-test
+  (test-node "Retry -> Random -> 10 faulty lbs -> One pool"
+    (let [dynos (pool pool-size (faulty-dyno))]
+      (retry 3
+        (lb-random
+          (pool 10
+            (cable 5
+              (faulty-lb
+                dynos))))))))
+
+(deftest ^:distributed ^:focus retry-random-faulty-lb-block-test
+  (assert (zero? (mod pool-size 10)))
+  (test-node "Retry -> Random -> 10 faulty lbs -> 10 pools"
+    (retry 3
+      (lb-random
+        (pool 10
+          (cable 5
+            (faulty-lb
+              (pool (/ pool-size 10)
+                (faulty-dyno)))))))))
