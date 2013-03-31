@@ -174,7 +174,7 @@
               (faulty-lb
                 dynos))))))))
 
-(deftest ^:distributed ^:focus retry-random-faulty-lb-block-test
+(deftest ^:distributed retry-random-faulty-lb-block-test
   (assert (zero? (mod pool-size 10)))
   (test-node "Retry -> Random -> 10 faulty lbs -> 10 pools"
     (retry 3

@@ -149,6 +149,14 @@
 
           res)))))
 
+(declare lb-one-conn)
+(defn queue-fixed-concurrency
+  "Like queue-exclusive, but can process N messages at a time. Each call to this
+  node enters a queue, and awaits a turn to be one of N threads simultaneously
+  calling (downstream req)."
+  [n downstream]
+  (lb-one-conn :queue-fixed-concurrency (vec (repeat n downstream))))
+
 (defn server
   "A node which returns a response."
   ([] (server :server))
@@ -268,6 +276,52 @@
            (release idx))
          resp)))))
 
+(defn lb-one-conn
+  "A load balancer which allows only one concurrent operation per backend in
+  its pool. Like lb-min-conn, but queues requests when all backends are busy.
+  Requests are processed in FIFO order."
+  ([pool] (lb-one-conn :lb-one-conn pool))
+  ([name pool] (lb-one-conn name {} pool))
+  ([name opts pool]
+   (let [queue (ref (list))
+         free  (ref (set pool))
+
+         ; Free up a backend when we're done using it.
+         release (fn [backend]
+                   (let [job (dosync
+                               (let [q (ensure queue)]
+                                 (if (empty? q)
+                                   ; Mark this backend as free.
+                                   (do
+                                     (alter free conj backend))
+                                   ; Dequeue a job; it'll claim this backend.
+                                   (let [job (last q)]
+                                     (alter queue drop-last)
+                                     job))))]
+                     ; Hand off the backend to that job.
+                     (deliver job backend)))
+
+         ; Claim a backend. May sleep.
+         claim (fn []
+                 (or
+                   ; Try to acquire a backend immediately.
+                   (dosync
+                     (when-let [b (first (ensure free))]
+                       (alter free disj b)
+                       b))
+                   ; Otherwise, we must wait
+                   (let [job (promise)]
+                     (dosync
+                       (alter queue conj job))
+                     ; Wait for the promise to be delivered.
+                     (deref* job))))]
+
+     (fn [req]
+       (let [backend (claim)
+             response (backend req)]
+         (release backend)
+         response)))))
+
 (defn load-interval
   "Every (dt) seconds, for a total of n requests, fires off a thread to apply
   (req) to node. Returns a list of results."
@@ -286,7 +340,11 @@
             (deliver p (conj r {:node :load-interval 
                                 :error (error? r)
                                 :time (time)}))))
-        (sleep (dt))
+        ; Sleep
+        (let [dt (dt)]
+          (when (pos? dt)
+            (sleep dt)))
+        ; Repeat
         (recur (inc i) ps))
       (do
         (doall (map deref* ps))))))
@@ -296,6 +354,11 @@
   to node. Returns a list of results."
   [n dt req-generator node]
   (load-interval n (constantly dt) req-generator node))
+
+(defn load-instant
+  "Fires off n requests all at once. Returns a list of results."
+  [n req-generator node]
+  (load-constant n 0 req-generator node))
 
 (defn load-poisson
   "A Poisson-distributed process: requests are uniformly distributed through

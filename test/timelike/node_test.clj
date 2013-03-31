@@ -41,3 +41,25 @@
                failed (count (keep identity @results))]
            ; (pprint @results)
            (is (< 0.05 (/ failed (count @results)) 0.15))))
+
+(deftest ^:focus lb-one-conn-test
+         (let [n 100
+               concurrency 10
+               dt 1
+               lb (lb-one-conn (pool concurrency (delay-fixed dt identity)))
+               results (deref (future*
+                                (load-instant n req lb)))]
+           ; Every request started at 0
+           (is (every? zero? (map (comp :time first) results)))
+           ; There should be [concurrency] requests completed at each time slice
+           ; in units of dt.
+           (let [times (->> results
+                         (map (comp :time last))
+                         (group-by identity)
+                         (map (fn [[k v]] [k (count v)])))
+                 targets (map (fn [t] [t concurrency])
+                              (range dt (/ (* dt (inc n)) 
+                                           concurrency) dt))]
+             (prn times)
+             (prn targets)
+             (is (= times targets)))))
