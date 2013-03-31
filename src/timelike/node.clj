@@ -186,6 +186,36 @@
           (downstream req)
           (conj req (error)))))))
 
+(defmacro worker-pool
+  [n & body]
+  (let [queue (LinkedBlockingQueue.)]
+    (let [latch (CountDownLatch. 1)
+          pair  [(thread-id) latch]]
+
+      ; LMAO if you are smart enough to do this with CAS memory effects only
+      (when-not (locking queue
+                  (.put queue pair)
+                  (= pair (.peek queue)))
+        ; We're not the first. GO TO SLEEEP.
+        (inactivate!)
+        (.await latch))
+
+      ; Execute request.
+      (let [pool `(mapv
+                    (fn [i#] ~@body)
+                    (range ~n))]
+
+        ; We're at the head of the queue; remove ourselves
+        ; and check for a successor.
+        (when-let [pair2 (locking queue
+                           (assert (= pair (.poll queue)))
+                           (.peek queue))]
+            ; Activate our successor and allow them to continue.
+            (activate! (first pair2))
+            (.countDown (second pair2)))
+
+        pool))))
+
 (defmacro pool
   "Evaluates body n times and returns a vector of the results."
   [n & body]

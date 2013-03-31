@@ -86,6 +86,23 @@
   [n]
   (pool n (dyno)))
 
+(defn unicorn-worker
+  "A pool of n unicorn workers."
+  [n]
+  (cable 2
+    (lb-min-conn
+      (worker-pool n
+        (mutex
+          (delay-fixed 20
+            (delay-exponential 100
+              (server :rails))))))))
+
+(defn unicorn-master
+  "A pool of n unicorn master with x number of workers"
+  [n x]
+  (pool n
+    (unicorn-worker x)))
+
 (deftest single-dyno-test
          (let [responses (future*
                            (load-poisson 10000 150 req (dyno)))]
@@ -109,6 +126,11 @@
          (test-node "Min-conn LB"
            (lb-min-conn
              (dynos pool-size))))
+
+(deftest ^:simple unicorn-test
+         (test-node "Unicorn LB"
+           (lb-min-conn
+             (unicorn-master (/ pool-size 2) 2))))
 
 (defn bamboo-test
   [n]
